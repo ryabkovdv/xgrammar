@@ -4127,7 +4127,8 @@ Grammar JSONSchemaToGrammar(
     bool strict_mode,
     std::optional<int> max_whitespace_cnt,
     bool any_order,
-    JSONFormat json_format
+    JSONFormat json_format,
+    const std::unordered_map<std::string, std::variant<int32_t, std::string>>& custom_tokens
 ) {
   picojson::value schema_value;
   std::string error = picojson::parse(schema_value, schema);
@@ -4181,7 +4182,8 @@ Grammar JSONSchemaToGrammar(
           any_whitespace,
           max_whitespace_cnt,
           std::move(ref_resolver),
-          any_order
+          any_order,
+          custom_tokens
       );
       return converter.Convert(spec);
     }
@@ -4210,7 +4212,8 @@ std::string JSONSchemaToEBNF(
     bool strict_mode,
     std::optional<int> max_whitespace_cnt,
     JSONFormat json_format,
-    bool any_order
+    bool any_order,
+    const std::unordered_map<std::string, std::variant<int32_t, std::string>>& custom_tokens
 ) {
   picojson::value schema_value;
   std::string err = picojson::parse(schema_value, schema);
@@ -4224,7 +4227,8 @@ std::string JSONSchemaToEBNF(
       strict_mode,
       max_whitespace_cnt,
       json_format,
-      any_order
+      any_order,
+      custom_tokens
   );
 }
 
@@ -4236,7 +4240,8 @@ std::string JSONSchemaToEBNF(
     bool strict_mode,
     std::optional<int> max_whitespace_cnt,
     JSONFormat json_format,
-    bool any_order
+    bool any_order,
+    const std::unordered_map<std::string, std::variant<int32_t, std::string>>& custom_tokens
 ) {
   // Parse JSON Schema to SchemaSpec
   SchemaParser parser(schema, {strict_mode, json_format});
@@ -4279,7 +4284,13 @@ std::string JSONSchemaToEBNF(
     }
     case JSONFormat::kDeepSeekXML: {
       DeepSeekXMLToolCallingConverter converter(
-          indent, separators, any_whitespace, max_whitespace_cnt, ref_resolver, any_order
+          indent,
+          separators,
+          any_whitespace,
+          max_whitespace_cnt,
+          ref_resolver,
+          any_order,
+          custom_tokens
       );
       return GrammarNormalizer::Apply(converter.Convert(spec)).ToString();
     }

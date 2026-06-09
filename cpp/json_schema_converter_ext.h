@@ -141,7 +141,8 @@ class DeepSeekXMLToolCallingConverter : public XMLToolCallingConverter {
       bool any_whitespace,
       std::optional<int> max_whitespace_cnt,
       RefResolver ref_resolver = nullptr,
-      bool any_order = false
+      bool any_order = false,
+      const std::unordered_map<std::string, std::variant<int32_t, std::string>>& custom_tokens = {}
   );
 
  protected:
@@ -173,7 +174,9 @@ class DeepSeekXMLToolCallingConverter : public XMLToolCallingConverter {
   };
 
   static const std::string kXMLAnyJSON;
-  static constexpr const char* kKeySuffixes[] = {
+  static const std::string kDefaultDSMLToken;
+
+  static constexpr const char* kKeyWrapperSuffixes[] = {
       "\" string=\"true\">",
       "\" string=\"false\">",
   };
@@ -212,6 +215,10 @@ class DeepSeekXMLToolCallingConverter : public XMLToolCallingConverter {
 
   void AddCache(const std::string& key, int32_t rule_id, GenerateMode mode);
   std::optional<int32_t> GetCache(const std::string& key, GenerateMode mode) const;
+
+  std::variant<int32_t, std::string> dsml_token_;
+  int32_t dsml_key_wrapper_prefix_expr_ = -1;
+  int32_t dsml_parameter_suffix_expr_ = -1;
 
   GenerateCacheManager constrained_rule_cache_manager_;
   std::unordered_map<std::pair<std::string, GenerateMode>, std::string>

@@ -77,12 +77,10 @@ const std::unordered_map<JSONFormat, XMLToolCallingConverter::XMLWrapper>
     XMLToolCallingConverter::kKeyWrapperMap = {
         {JSONFormat::kQwenXML, {"<parameter=", ">", "", "</parameter>"}},
         {JSONFormat::kMiniMaxXML, {"<parameter name=\"", "\">", "", "</parameter>"}},
-        {JSONFormat::kDeepSeekXML,
-         {"<｜DSML｜parameter name=\"",
-          "",
-          "",
-          // The key suffix is generated in DeepSeekXMLToolCallingConverter.
-          "</｜DSML｜parameter>"}},
+        {
+            JSONFormat::kDeepSeekXML, {"", "", "", ""},
+            // Generated in DeepSeekXMLToolCallingConverter.
+        },
         {JSONFormat::kGlmXML, {"<arg_key>", "</arg_key>", "<arg_value>", "</arg_value>"}},
         {JSONFormat::kCohereXML, {"<cofl:value", ">", "", "</cofl:value>"}},
         {JSONFormat::kKimiK3XML,
@@ -478,6 +476,7 @@ std::optional<int32_t> XMLToolCallingConverter::GetCache(const std::string& key)
 }
 
 const std::string DeepSeekXMLToolCallingConverter::kXMLAnyJSON = "xml_any_json";
+const std::string DeepSeekXMLToolCallingConverter::kDefaultDSMLToken = "｜DSML｜";
 
 DeepSeekXMLToolCallingConverter::DeepSeekXMLToolCallingConverter(
     std::optional<int> indent,
@@ -485,7 +484,8 @@ DeepSeekXMLToolCallingConverter::DeepSeekXMLToolCallingConverter(
     bool any_whitespace,
     std::optional<int> max_whitespace_cnt,
     RefResolver ref_resolver,
-    bool any_order
+    bool any_order,
+    const std::unordered_map<std::string, std::variant<int32_t, std::string>>& custom_tokens
 )
     : XMLToolCallingConverter(
           indent,
@@ -495,7 +495,14 @@ DeepSeekXMLToolCallingConverter::DeepSeekXMLToolCallingConverter(
           ref_resolver,
           JSONFormat::kDeepSeekXML,
           any_order
-      ) {}
+      ) {
+  auto dsml_it = custom_tokens.find("dsml");
+  if (dsml_it != custom_tokens.end()) {
+    dsml_token_ = dsml_it->second;
+  } else {
+    dsml_token_ = kDefaultDSMLToken;
+  }
+}
 
 void DeepSeekXMLToolCallingConverter::AddBasicRules() {
   XMLToolCallingConverter::AddBasicRules({kXMLString, kXMLAnyJSON});
@@ -503,7 +510,20 @@ void DeepSeekXMLToolCallingConverter::AddBasicRules() {
 
 void DeepSeekXMLToolCallingConverter::AddXMLBasicRulesLevel1() {
   // Add XML string rule
-  builder_.UpdateRuleBody(kXMLString, TagDispatch(false, {xml_wrapper_.parameter_suffix}));
+  builder_.UpdateRuleBody(
+      kXMLString,
+      std::visit(
+          [this](const auto& dsml) {
+            using T = std::decay_t<decltype(dsml)>;
+            if constexpr (std::is_same_v<T, int32_t>) {
+              return builder_.AddCharacterClassStar({{0, 0x10ffff}});
+            } else {
+              return TagDispatch(false, {"</" + dsml + "parameter>"});
+            }
+          },
+          dsml_token_
+      )
+  );
   int32_t xml_string_rule_id = builder_.GetRuleId(kXMLString);
   AddCache(kStringCacheKey, xml_string_rule_id);
 
@@ -522,6 +542,33 @@ void DeepSeekXMLToolCallingConverter::AddXMLBasicRulesLevel1() {
   AddCache(kNullCacheKey, builder_.GetRuleId(kBasicNull), GenerateMode::kJSON);
   AddCache(kArrayCacheKey, builder_.GetRuleId(kBasicArray), GenerateMode::kJSON);
   AddCache(kObjectCacheKey, builder_.GetRuleId(kBasicObject), GenerateMode::kJSON);
+
+  // Initialize DSML expressions
+  int32_t dsml_token_expr = -1;
+  dsml_key_wrapper_prefix_expr_ = std::visit(
+      [this, &dsml_token_expr](const auto& dsml) {
+        using T = std::decay_t<decltype(dsml)>;
+        if constexpr (std::is_same_v<T, int32_t>) {
+          dsml_token_expr = builder_.AddTokenSet({dsml});
+          return Sequence({ByteString("<"), dsml_token_expr, ByteString("parameter name=\"")});
+        } else {
+          return ByteString("<" + dsml + "parameter name=\"");
+        }
+      },
+      dsml_token_
+  );
+  dsml_parameter_suffix_expr_ = std::visit(
+      [this, &dsml_token_expr](const auto& dsml) {
+        using T = std::decay_t<decltype(dsml)>;
+        if constexpr (std::is_same_v<T, int32_t>) {
+          XGRAMMAR_DCHECK(dsml_token_expr >= 0);
+          return Sequence({ByteString("</"), dsml_token_expr, ByteString("parameter>")});
+        } else {
+          return ByteString("</" + dsml + "parameter>");
+        }
+      },
+      dsml_token_
+  );
 }
 
 int32_t DeepSeekXMLToolCallingConverter::FormatProperty(
@@ -549,7 +596,7 @@ int32_t DeepSeekXMLToolCallingConverter::FormatProperty(
     }
 
     std::vector<int32_t> prop_elements = {
-        ByteString(xml_wrapper_.key_wrapper_prefix + key + kKeySuffixes[static_cast<int>(mode)])
+        dsml_key_wrapper_prefix_expr_, ByteString(key + kKeyWrapperSuffixes[static_cast<int>(mode)])
     };
     if (mode == GenerateMode::kJSON) {
       prop_elements.push_back(WhitespaceExpression());
@@ -558,7 +605,7 @@ int32_t DeepSeekXMLToolCallingConverter::FormatProperty(
     if (mode == GenerateMode::kJSON) {
       prop_elements.push_back(WhitespaceExpression());
     }
-    prop_elements.push_back(ByteString(xml_wrapper_.parameter_suffix));
+    prop_elements.push_back(dsml_parameter_suffix_expr_);
     elements.push_back(Sequence(prop_elements));
   }
 
@@ -593,9 +640,9 @@ int32_t DeepSeekXMLToolCallingConverter::FormatOtherProperty(
     }
 
     std::vector<int32_t> prop_elements = {
-        ByteString(xml_wrapper_.key_wrapper_prefix),
+        dsml_key_wrapper_prefix_expr_,
         key_pattern_expr,
-        ByteString(kKeySuffixes[static_cast<int>(mode)])
+        ByteString(kKeyWrapperSuffixes[static_cast<int>(mode)])
     };
     if (mode == GenerateMode::kJSON) {
       prop_elements.push_back(WhitespaceExpression());
@@ -604,7 +651,7 @@ int32_t DeepSeekXMLToolCallingConverter::FormatOtherProperty(
     if (mode == GenerateMode::kJSON) {
       prop_elements.push_back(WhitespaceExpression());
     }
-    prop_elements.push_back(ByteString(xml_wrapper_.parameter_suffix));
+    prop_elements.push_back(dsml_parameter_suffix_expr_);
     elements.push_back(Sequence(prop_elements));
   }
 

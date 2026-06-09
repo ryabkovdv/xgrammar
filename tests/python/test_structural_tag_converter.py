@@ -1,14 +1,14 @@
 import json
 import sys
 import time
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
 import pytest
 from transformers import AutoTokenizer
 
 import xgrammar as xgr
 from xgrammar.structural_tag import JSONSchemaFormat, SequenceFormat, StructuralTag, TagFormat
-from xgrammar.testing import _is_grammar_accept_string
+from xgrammar.testing import _is_grammar_accept_string, _is_grammar_accept_tokens
 
 
 class Profiler:
@@ -90,6 +90,55 @@ def check_stag_with_instance(
     assert accepted == is_accepted
     if PROFILER_ON:
         profiler.profile_stag(structural_tag_format, instance)
+
+
+def check_stag_with_tokens(
+    structural_tag_format: Union[Dict[str, Any], StructuralTag],
+    instance: List[Union[int, str]],
+    is_accepted: bool = True,
+    additional_tokens: Iterable[str] = ("</s>",),
+    additional_special_token_ids: Optional[List[int]] = None,
+    debug_print: bool = False,
+):
+    encoded_vocab = _BYTE_LEVEL_VOCAB + [
+        "".join(map(_BYTE_LEVEL_VOCAB.__getitem__, token.encode())) for token in additional_tokens
+    ]
+    tokenizer_info = xgr.TokenizerInfo(
+        encoded_vocab,
+        xgr.VocabType.BYTE_LEVEL,
+        additional_special_token_ids=additional_special_token_ids,
+    )
+    tokens = []
+    for item in instance:
+        if isinstance(item, int):
+            tokens.append(item)
+        else:
+            tokens += item.encode()
+
+    if isinstance(structural_tag_format, StructuralTag):
+        stag_grammar = xgr.Grammar.from_structural_tag(structural_tag_format)
+    else:
+        structural_tag = {"type": "structural_tag", "format": structural_tag_format}
+        stag_grammar = xgr.Grammar.from_structural_tag(structural_tag)
+    accepted = _is_grammar_accept_tokens(
+        stag_grammar, tokens, tokenizer_info, debug_print=debug_print
+    )
+    assert accepted == is_accepted
+
+
+_BYTE_LEVEL_VOCAB = list(
+    map(
+        chr,
+        [
+            *range(0x0100, 0x0121),
+            *range(0x0021, 0x007F),
+            *range(0x0121, 0x0143),
+            *range(0x00A1, 0x00AD),
+            *range(0x0143, 0x0144),
+            *range(0x00AE, 0x0100),
+        ],
+    )
+)
 
 
 const_string_stag_grammar = [
@@ -343,27 +392,35 @@ def test_json_schema_style_minimax_xml_format(
 
 
 # JSONSchemaFormat with style="deepseek_xml" (<｜DSML｜parameter name="key" string="true|false">value</｜DSML｜parameter>)
-deepseek_xml_instance_is_accepted = [
-    (
-        '<｜DSML｜parameter name="name" string="true">Bob</｜DSML｜parameter><｜DSML｜parameter name="age" string="false">\t100\n</｜DSML｜parameter>',
-        True,
-    ),
-    (
-        '<｜DSML｜parameter name="name" string="true">Bob</｜DSML｜parameter>\t\n<｜DSML｜parameter name="age" string="true">\t100\n</｜DSML｜parameter>',
-        False,
-    ),
-    (
-        '<｜DSML｜parameter name="name" string="false">Bob</｜DSML｜parameter><｜DSML｜parameter name="age" string="true">100</｜DSML｜parameter>',
-        False,
-    ),
-    (
-        """<｜DSML｜parameter name="name" string="true"><!DOCTYPE html>
-<html lang="en">
-  <body><h1>Hello</h1></body>
-</html></｜DSML｜parameter><｜DSML｜parameter name="age" string="false">100</｜DSML｜parameter>""",
-        True,
-    ),
-]
+
+
+def _make_deepseek_xml_custom_dsml_token_instances(stag_format: Dict[str, Any]):
+    # "｜XY｜", "</", " <", " </", "</s>"
+    dsml, ls, wl, wls, eos = range(256, 256 + 5)
+    prefix = ["<", dsml, 'parameter name="name" string="true">']
+    suffix = [dsml, "parameter>", eos]
+
+    instances = []
+
+    contents = [[], ["A"], ["A｜XY｜"]]
+    for a in [[], [ls], ["</"], [wls], [wl, "/"]]:
+        for b in [["｜XY｜"], ["｜XY｜A"]]:
+            contents.append(a + b)
+    for content in contents:
+        for close_tag in [[ls], ["</"], [wls], [wl, "/"]]:
+            instances.append((stag_format, [*prefix, *content, *close_tag, *suffix], True))
+
+    contents = [["A", dsml]]
+    for a in [[], [ls], ["</"], [wls], [wl, "/"]]:
+        for b in [[dsml], [dsml, "A"]]:
+            contents.append(a + b)
+    for content in contents:
+        for close_tag in [[ls], ["</"], [wls], [wl, "/"]]:
+            instances.append((stag_format, [*prefix, *content, *close_tag, *suffix], False))
+
+    return instances
+
+
 json_schema_style_deepseek_xml_stag_grammar = [
     (
         {
@@ -396,8 +453,8 @@ basic_number_digits ::= (([0-9]))
 basic_array_items ::= (([ \n\r\t]* "," [ \n\r\t]* basic_any))
 basic_object_properties ::= (([ \n\r\t]* "," [ \n\r\t]* basic_string [ \n\r\t]* ":" [ \n\r\t]* basic_any))
 xml_object_properties ::= (([ \n\r\t]* xml_object_properties_1))
-root_0 ::= (([ \n\r\t]* "<\uff5cDSML\uff5cparameter name=\"name\" string=\"true\">" xml_string "</\uff5cDSML\uff5cparameter>" root_part_0 [ \n\r\t]*))
-root_part_0 ::= (([ \n\r\t]* "<\uff5cDSML\uff5cparameter name=\"age\" string=\"false\">" [ \n\r\t]* basic_integer [ \n\r\t]* "</\uff5cDSML\uff5cparameter>"))
+root_0 ::= (([ \n\r\t]* "<\uff5cDSML\uff5cparameter name=\"" "name\" string=\"true\">" xml_string "</\uff5cDSML\uff5cparameter>" root_part_0 [ \n\r\t]*))
+root_part_0 ::= (([ \n\r\t]* "<\uff5cDSML\uff5cparameter name=\"" "age\" string=\"false\">" [ \n\r\t]* basic_integer [ \n\r\t]* "</\uff5cDSML\uff5cparameter>"))
 basic_integer_1 ::= ("" | ("-"))
 basic_number_1 ::= ("" | ("-"))
 basic_number_2 ::= (("0") | ([1-9] [0-9]*))
@@ -408,20 +465,281 @@ xml_object_1 ::= (("<\uff5cDSML\uff5cparameter name=\"" xml_variable_name "\" st
 xml_object_properties_1 ::= (("<\uff5cDSML\uff5cparameter name=\"" xml_variable_name "\" string=\"true\">" xml_string "</\uff5cDSML\uff5cparameter>") | ("<\uff5cDSML\uff5cparameter name=\"" xml_variable_name "\" string=\"false\">" [ \n\r\t]* xml_any_json [ \n\r\t]* "</\uff5cDSML\uff5cparameter>"))
 root ::= ((root_0))
 """,
-    )
+    ),
+    (
+        {
+            "type": "json_schema",
+            "json_schema": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}, "age": {"type": "integer"}},
+                "required": ["name", "age"],
+            },
+            "style": "deepseek_xml",
+            "custom_tokens": {"dsml": "｜XY｜"},
+        },
+        r"""basic_escape ::= (([\"\\/bfnrt]) | ("u" [A-Fa-f0-9] [A-Fa-f0-9] [A-Fa-f0-9] [A-Fa-f0-9]))
+basic_string_sub ::= (("\"") | ([^\0-\x1f\"\\\r\n] basic_string_sub) | ("\\" basic_escape basic_string_sub)) (=([ \n\r\t]* [,}\]:]))
+basic_any ::= ((basic_number) | (basic_string) | (basic_boolean) | (basic_null) | (basic_array) | (basic_object))
+basic_integer ::= (("0") | (basic_integer_1 [1-9] [0-9]*))
+basic_number ::= ((basic_number_1 basic_number_2 basic_number_3 basic_number_5))
+basic_string ::= (("\"" basic_string_sub))
+basic_boolean ::= (("true") | ("false"))
+basic_null ::= (("null"))
+basic_array ::= (("[" [ \n\r\t]* basic_any basic_array_items{0, -1} [ \n\r\t]* "]") | ("[" [ \n\r\t]* "]"))
+basic_object ::= (("{" [ \n\r\t]* basic_string [ \n\r\t]* ":" [ \n\r\t]* basic_any basic_object_properties{0, -1} [ \n\r\t]* "}") | ("{" [ \n\r\t]* "}"))
+xml_string ::= TagDispatch(
+  loop_after_dispatch=false,
+  excludes=("</\uff5cXY\uff5cparameter>")
+)
+xml_any_json ::= ((basic_number) | (basic_boolean) | (basic_null) | (basic_array) | (basic_object))
+xml_object ::= (([ \n\r\t]* xml_object_1 xml_object_properties{0, -1} [ \n\r\t]*) | ([ \n\r\t]*))
+xml_variable_name ::= (([a-zA-Z_] [a-zA-Z0-9_]*))
+basic_number_digits ::= (([0-9]))
+basic_array_items ::= (([ \n\r\t]* "," [ \n\r\t]* basic_any))
+basic_object_properties ::= (([ \n\r\t]* "," [ \n\r\t]* basic_string [ \n\r\t]* ":" [ \n\r\t]* basic_any))
+xml_object_properties ::= (([ \n\r\t]* xml_object_properties_1))
+root_0 ::= (([ \n\r\t]* "<\uff5cXY\uff5cparameter name=\"" "name\" string=\"true\">" xml_string "</\uff5cXY\uff5cparameter>" root_part_0 [ \n\r\t]*))
+root_part_0 ::= (([ \n\r\t]* "<\uff5cXY\uff5cparameter name=\"" "age\" string=\"false\">" [ \n\r\t]* basic_integer [ \n\r\t]* "</\uff5cXY\uff5cparameter>"))
+basic_integer_1 ::= ("" | ("-"))
+basic_number_1 ::= ("" | ("-"))
+basic_number_2 ::= (("0") | ([1-9] [0-9]*))
+basic_number_3 ::= ("" | ("." basic_number_digits{1, -1}))
+basic_number_4 ::= ("" | ([+\-]))
+basic_number_5 ::= ("" | ([eE] basic_number_4 basic_number_digits{1, -1}))
+xml_object_1 ::= (("<\uff5cXY\uff5cparameter name=\"" xml_variable_name "\" string=\"true\">" xml_string "</\uff5cXY\uff5cparameter>") | ("<\uff5cXY\uff5cparameter name=\"" xml_variable_name "\" string=\"false\">" [ \n\r\t]* xml_any_json [ \n\r\t]* "</\uff5cXY\uff5cparameter>"))
+xml_object_properties_1 ::= (("<\uff5cXY\uff5cparameter name=\"" xml_variable_name "\" string=\"true\">" xml_string "</\uff5cXY\uff5cparameter>") | ("<\uff5cXY\uff5cparameter name=\"" xml_variable_name "\" string=\"false\">" [ \n\r\t]* xml_any_json [ \n\r\t]* "</\uff5cXY\uff5cparameter>"))
+root ::= ((root_0))
+""",
+    ),
+    (
+        {
+            "type": "json_schema",
+            "json_schema": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}, "age": {"type": "integer"}},
+                "required": ["name", "age"],
+            },
+            "style": "deepseek_xml",
+            "custom_tokens": {"dsml": {"type": "token", "token": 256}},
+        },
+        r"""basic_escape ::= (([\"\\/bfnrt]) | ("u" [A-Fa-f0-9] [A-Fa-f0-9] [A-Fa-f0-9] [A-Fa-f0-9]))
+basic_string_sub ::= (("\"") | ([^\0-\x1f\"\\\r\n] basic_string_sub) | ("\\" basic_escape basic_string_sub)) (=([ \n\r\t]* [,}\]:]))
+basic_any ::= ((basic_number) | (basic_string) | (basic_boolean) | (basic_null) | (basic_array) | (basic_object))
+basic_integer ::= (("0") | (basic_integer_1 [1-9] [0-9]*))
+basic_number ::= ((basic_number_1 basic_number_2 basic_number_3 basic_number_5))
+basic_string ::= (("\"" basic_string_sub))
+basic_boolean ::= (("true") | ("false"))
+basic_null ::= (("null"))
+basic_array ::= (("[" [ \n\r\t]* basic_any basic_array_items{0, -1} [ \n\r\t]* "]") | ("[" [ \n\r\t]* "]"))
+basic_object ::= (("{" [ \n\r\t]* basic_string [ \n\r\t]* ":" [ \n\r\t]* basic_any basic_object_properties{0, -1} [ \n\r\t]* "}") | ("{" [ \n\r\t]* "}"))
+xml_string ::= (([\0-\U0010ffff]*))
+xml_any_json ::= ((basic_number) | (basic_boolean) | (basic_null) | (basic_array) | (basic_object))
+xml_object ::= (([ \n\r\t]* xml_object_1 xml_object_properties{0, -1} [ \n\r\t]*) | ([ \n\r\t]*))
+xml_variable_name ::= (([a-zA-Z_] [a-zA-Z0-9_]*))
+basic_number_digits ::= (([0-9]))
+basic_array_items ::= (([ \n\r\t]* "," [ \n\r\t]* basic_any))
+basic_object_properties ::= (([ \n\r\t]* "," [ \n\r\t]* basic_string [ \n\r\t]* ":" [ \n\r\t]* basic_any))
+xml_object_properties ::= (([ \n\r\t]* xml_object_properties_1))
+root_0 ::= (([ \n\r\t]* "<" Token(256) "parameter name=\"" "name\" string=\"true\">" xml_string "</" Token(256) "parameter>" root_part_0 [ \n\r\t]*))
+root_part_0 ::= (([ \n\r\t]* "<" Token(256) "parameter name=\"" "age\" string=\"false\">" [ \n\r\t]* basic_integer [ \n\r\t]* "</" Token(256) "parameter>"))
+basic_integer_1 ::= ("" | ("-"))
+basic_number_1 ::= ("" | ("-"))
+basic_number_2 ::= (("0") | ([1-9] [0-9]*))
+basic_number_3 ::= ("" | ("." basic_number_digits{1, -1}))
+basic_number_4 ::= ("" | ([+\-]))
+basic_number_5 ::= ("" | ([eE] basic_number_4 basic_number_digits{1, -1}))
+xml_object_1 ::= (("<" Token(256) "parameter name=\"" xml_variable_name "\" string=\"true\">" xml_string "</" Token(256) "parameter>") | ("<" Token(256) "parameter name=\"" xml_variable_name "\" string=\"false\">" [ \n\r\t]* xml_any_json [ \n\r\t]* "</" Token(256) "parameter>"))
+xml_object_properties_1 ::= (("<" Token(256) "parameter name=\"" xml_variable_name "\" string=\"true\">" xml_string "</" Token(256) "parameter>") | ("<" Token(256) "parameter name=\"" xml_variable_name "\" string=\"false\">" [ \n\r\t]* xml_any_json [ \n\r\t]* "</" Token(256) "parameter>"))
+root ::= ((root_0))
+""",
+    ),
+    (
+        {
+            "type": "json_schema",
+            "json_schema": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+                "required": ["name"],
+            },
+            "style": "deepseek_xml",
+            "custom_tokens": {"dsml": {"type": "token", "token": 256}},
+        },
+        r"""basic_escape ::= (([\"\\/bfnrt]) | ("u" [A-Fa-f0-9] [A-Fa-f0-9] [A-Fa-f0-9] [A-Fa-f0-9]))
+basic_string_sub ::= (("\"") | ([^\0-\x1f\"\\\r\n] basic_string_sub) | ("\\" basic_escape basic_string_sub)) (=([ \n\r\t]* [,}\]:]))
+basic_any ::= ((basic_number) | (basic_string) | (basic_boolean) | (basic_null) | (basic_array) | (basic_object))
+basic_integer ::= (("0") | (basic_integer_1 [1-9] [0-9]*))
+basic_number ::= ((basic_number_1 basic_number_2 basic_number_3 basic_number_5))
+basic_string ::= (("\"" basic_string_sub))
+basic_boolean ::= (("true") | ("false"))
+basic_null ::= (("null"))
+basic_array ::= (("[" [ \n\r\t]* basic_any basic_array_items{0, -1} [ \n\r\t]* "]") | ("[" [ \n\r\t]* "]"))
+basic_object ::= (("{" [ \n\r\t]* basic_string [ \n\r\t]* ":" [ \n\r\t]* basic_any basic_object_properties{0, -1} [ \n\r\t]* "}") | ("{" [ \n\r\t]* "}"))
+xml_string ::= (([\0-\U0010ffff]*))
+xml_any_json ::= ((basic_number) | (basic_boolean) | (basic_null) | (basic_array) | (basic_object))
+xml_object ::= (([ \n\r\t]* xml_object_1 xml_object_properties{0, -1} [ \n\r\t]*) | ([ \n\r\t]*))
+xml_variable_name ::= (([a-zA-Z_] [a-zA-Z0-9_]*))
+basic_number_digits ::= (([0-9]))
+basic_array_items ::= (([ \n\r\t]* "," [ \n\r\t]* basic_any))
+basic_object_properties ::= (([ \n\r\t]* "," [ \n\r\t]* basic_string [ \n\r\t]* ":" [ \n\r\t]* basic_any))
+xml_object_properties ::= (([ \n\r\t]* xml_object_properties_1))
+root_0 ::= (([ \n\r\t]* "<" Token(256) "parameter name=\"" "name\" string=\"true\">" xml_string "</" Token(256) "parameter>" [ \n\r\t]*))
+basic_integer_1 ::= ("" | ("-"))
+basic_number_1 ::= ("" | ("-"))
+basic_number_2 ::= (("0") | ([1-9] [0-9]*))
+basic_number_3 ::= ("" | ("." basic_number_digits{1, -1}))
+basic_number_4 ::= ("" | ([+\-]))
+basic_number_5 ::= ("" | ([eE] basic_number_4 basic_number_digits{1, -1}))
+xml_object_1 ::= (("<" Token(256) "parameter name=\"" xml_variable_name "\" string=\"true\">" xml_string "</" Token(256) "parameter>") | ("<" Token(256) "parameter name=\"" xml_variable_name "\" string=\"false\">" [ \n\r\t]* xml_any_json [ \n\r\t]* "</" Token(256) "parameter>"))
+xml_object_properties_1 ::= (("<" Token(256) "parameter name=\"" xml_variable_name "\" string=\"true\">" xml_string "</" Token(256) "parameter>") | ("<" Token(256) "parameter name=\"" xml_variable_name "\" string=\"false\">" [ \n\r\t]* xml_any_json [ \n\r\t]* "</" Token(256) "parameter>"))
+root ::= ((root_0))
+""",
+    ),
+]
+deepseek_xml_instance_is_accepted = [
+    (
+        json_schema_style_deepseek_xml_stag_grammar[0][0],
+        '<｜DSML｜parameter name="name" string="true">Bob</｜DSML｜parameter><｜DSML｜parameter name="age" string="false">\t100\n</｜DSML｜parameter>',
+        True,
+    ),
+    (
+        json_schema_style_deepseek_xml_stag_grammar[0][0],
+        '<｜DSML｜parameter name="name" string="true">Bob</｜DSML｜parameter>\t\n<｜DSML｜parameter name="age" string="true">\t100\n</｜DSML｜parameter>',
+        False,
+    ),
+    (
+        json_schema_style_deepseek_xml_stag_grammar[0][0],
+        '<｜DSML｜parameter name="name" string="false">Bob</｜DSML｜parameter><｜DSML｜parameter name="age" string="true">100</｜DSML｜parameter>',
+        False,
+    ),
+    (
+        json_schema_style_deepseek_xml_stag_grammar[0][0],
+        """<｜DSML｜parameter name="name" string="true"><!DOCTYPE html>
+<html lang="en">
+  <body><h1>Hello</h1></body>
+</html></｜DSML｜parameter><｜DSML｜parameter name="age" string="false">100</｜DSML｜parameter>""",
+        True,
+    ),
+    (
+        json_schema_style_deepseek_xml_stag_grammar[1][0],
+        '<｜XY｜parameter name="name" string="true">Bob</｜XY｜parameter><｜XY｜parameter name="age" string="false">\t100\n</｜XY｜parameter>',
+        True,
+    ),
+    (
+        json_schema_style_deepseek_xml_stag_grammar[1][0],
+        '<｜XY｜parameter name="name" string="true">Bob</｜XY｜parameter>\t\n<｜XY｜parameter name="age" string="true">\t100\n</｜XY｜parameter>',
+        False,
+    ),
+    (
+        json_schema_style_deepseek_xml_stag_grammar[1][0],
+        '<｜XY｜parameter name="name" string="false">Bob</｜XY｜parameter><｜XY｜parameter name="age" string="true">100</｜XY｜parameter>',
+        False,
+    ),
+    (
+        json_schema_style_deepseek_xml_stag_grammar[1][0],
+        """<｜XY｜parameter name="name" string="true"><!DOCTYPE html>
+<html lang="en">
+  <body><h1>Hello</h1></body>
+</html></｜XY｜parameter><｜XY｜parameter name="age" string="false">100</｜XY｜parameter>""",
+        True,
+    ),
+    (
+        json_schema_style_deepseek_xml_stag_grammar[2][0],
+        [
+            "<",
+            256,
+            'parameter name="name" string="true">Bob</',
+            256,
+            "parameter><",
+            256,
+            'parameter name="age" string="false">\t100\n</',
+            256,
+            "parameter>",
+            260,
+        ],
+        True,
+    ),
+    (
+        json_schema_style_deepseek_xml_stag_grammar[2][0],
+        [
+            "<",
+            256,
+            'parameter name="name" string="true">Bob</',
+            256,
+            "parameter>\t\n<",
+            256,
+            'parameter name="age" string="true">\t100\n</',
+            256,
+            "parameter>",
+            260,
+        ],
+        False,
+    ),
+    (
+        json_schema_style_deepseek_xml_stag_grammar[2][0],
+        [
+            "<",
+            256,
+            'parameter name="name" string="false">Bob</',
+            256,
+            "parameter><",
+            256,
+            'parameter name="age" string="true">100</',
+            256,
+            "parameter>",
+            260,
+        ],
+        False,
+    ),
+    (
+        json_schema_style_deepseek_xml_stag_grammar[2][0],
+        [
+            "<",
+            256,
+            """parameter name="name" string="true"><!DOCTYPE html>
+<html lang="en">
+  <body><h1>Hello</h1></body>
+</html></""",
+            256,
+            "parameter><",
+            256,
+            'parameter name="age" string="false">100</',
+            256,
+            "parameter>",
+            260,
+        ],
+        True,
+    ),
+    *_make_deepseek_xml_custom_dsml_token_instances(
+        json_schema_style_deepseek_xml_stag_grammar[3][0]
+    ),
 ]
 
 
 @pytest.mark.parametrize(
     "stag_format, expected_grammar", json_schema_style_deepseek_xml_stag_grammar
 )
-@pytest.mark.parametrize("instance, is_accepted", deepseek_xml_instance_is_accepted)
-def test_json_schema_style_deepseek_xml_format(
-    stag_format: Dict[str, Any], expected_grammar: str, instance: str, is_accepted: bool
+def test_json_schema_style_deepseek_xml_format_grammar(
+    stag_format: Dict[str, Any], expected_grammar: str
 ):
     """Test JSONSchemaFormat with style='deepseek_xml' (<｜DSML｜parameter name=\"key\" string=\"true|false\">value</｜DSML｜parameter>)."""
     check_stag_with_grammar(stag_format, expected_grammar)
-    check_stag_with_instance(stag_format, instance, is_accepted)
+
+
+@pytest.mark.parametrize("stag_format, instance, is_accepted", deepseek_xml_instance_is_accepted)
+def test_json_schema_style_deepseek_xml_format_instances(
+    stag_format: Dict[str, Any], instance: Union[str, List[Union[int, str]]], is_accepted: bool
+):
+    """Test JSONSchemaFormat with style='deepseek_xml' (<｜DSML｜parameter name=\"key\" string=\"true|false\">value</｜DSML｜parameter>)."""
+    if isinstance(instance, str):
+        check_stag_with_instance(stag_format, instance, is_accepted)
+    else:
+        check_stag_with_tokens(
+            stag_format,
+            instance,
+            is_accepted,
+            additional_tokens=["｜XY｜", "</", " <", " </", "</s>"],
+            additional_special_token_ids=[256],
+        )
 
 
 glm_xml_instance_is_accepted = [
