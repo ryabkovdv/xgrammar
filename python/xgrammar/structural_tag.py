@@ -53,6 +53,11 @@ class JSONSchemaFormat(BaseModel):
     Applies to every object, nested included."""
     max_whitespace_cnt: Optional[int] = None
     """Max consecutive whitespace characters in this content. None means no limit."""
+    custom_tokens: Dict[str, Union[str, "TokenFormat"]] = {}
+    """Custom tokens for XML style.
+
+    Supported keys:
+    - "dsml": DSML token for "deepseek_xml" style."""
 
 
 class AnyTextFormat(BaseModel):

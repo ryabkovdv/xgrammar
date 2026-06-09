@@ -34,7 +34,8 @@ class XMLToolCallingConverter : public JSONSchemaConverter {
       std::optional<int> max_whitespace_cnt,
       RefResolver ref_resolver = nullptr,
       JSONFormat json_format = JSONFormat::kQwenXML,
-      bool any_order = false
+      bool any_order = false,
+      const std::unordered_map<std::string, std::variant<int32_t, std::string>>& custom_tokens = {}
   );
 
   /*! \brief Convert SchemaSpec to grammar with XML format for root object. Note that this function
@@ -89,6 +90,7 @@ class XMLToolCallingConverter : public JSONSchemaConverter {
     std::string key_wrapper_suffix;
     std::string value_wrapper_prefix;
     std::string parameter_suffix;
+    bool unrestricted_string = false;
   };
 
   static const std::unordered_map<JSONFormat, XMLWrapper> kKeyWrapperMap;
@@ -113,6 +115,12 @@ class XMLToolCallingConverter : public JSONSchemaConverter {
    */
   static std::optional<std::string> KimiK3TypeAttr(const SchemaSpecPtr& spec);
 
+  /*! \brief Build the expression for custom DSML token, if any. */
+  int32_t DSMLToken();
+
+  /*! \brief Build the expression before the property key. */
+  int32_t XMLKeyPrefix();
+
   /*!
    * \brief Build the expression between the property key and its value.
    * \param pinned_type For kimi_k3_xml, the single type attribute this property must carry.
@@ -121,10 +129,19 @@ class XMLToolCallingConverter : public JSONSchemaConverter {
    */
   int32_t XMLKeySuffix(const std::optional<std::string>& pinned_type = std::nullopt);
 
+  /*! \brief Build the expression after the property value. */
+  int32_t XMLParameterSuffix();
+
+  /*! \brief Build the expression for kXMLString rule. */
+  int32_t XMLString();
+
   JSONFormat json_format_;
   // Track if we're at the root object level
   int nested_object_level_ = 0;
   const XMLWrapper xml_wrapper_;
+
+  std::variant<std::monostate, int32_t, std::string> custom_dsml_token_;
+  int32_t dsml_token_expr_id_ = -1;
 };
 
 /*!

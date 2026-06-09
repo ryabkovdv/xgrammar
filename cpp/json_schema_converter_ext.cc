@@ -92,14 +92,24 @@ XMLToolCallingConverter::XMLToolCallingConverter(
     std::optional<int> max_whitespace_cnt,
     RefResolver ref_resolver,
     JSONFormat json_format,
-    bool any_order
+    bool any_order,
+    const std::unordered_map<std::string, std::variant<int32_t, std::string>>& custom_tokens
 )
     : JSONSchemaConverter(
           indent, separators, any_whitespace, max_whitespace_cnt, ref_resolver, any_order
       ),
       json_format_(json_format),
       nested_object_level_(0),
-      xml_wrapper_(kKeyWrapperMap.at(json_format)) {}
+      xml_wrapper_(kKeyWrapperMap.at(json_format)) {
+  auto cast_custom_token = [](const auto& arg) {
+    return std::variant<std::monostate, int32_t, std::string>{arg};
+  };
+  for (const auto& [name, token] : custom_tokens) {
+    if (name == "dsml") {
+      custom_dsml_token_ = std::visit(cast_custom_token, token);
+    }
+  }
+}
 
 Grammar XMLToolCallingConverter::Convert(const SchemaSpecPtr& spec) {
   nested_object_level_ = 0;
@@ -113,6 +123,16 @@ std::string XMLToolCallingConverter::XMLValue(const std::string& json_value) con
     return value.get<std::string>();
   }
   return json_value;
+}
+
+int32_t XMLToolCallingConverter::XMLKeyPrefix() {
+  if (json_format_ == JSONFormat::kDeepSeekXML) {
+    int32_t dsml_token_expr_id = DSMLToken();
+    if (dsml_token_expr_id >= 0) {
+      return Sequence({ByteString("<"), dsml_token_expr_id, ByteString("parameter name=\"")});
+    }
+  }
+  return ByteString(xml_wrapper_.key_wrapper_prefix);
 }
 
 int32_t XMLToolCallingConverter::XMLKeySuffix(const std::optional<std::string>& pinned_type) {
@@ -140,6 +160,36 @@ int32_t XMLToolCallingConverter::XMLKeySuffix(const std::optional<std::string>& 
     return Sequence({ByteString("\" type=\""), type_expr, ByteString("\"<|sep|>")});
   }
   return ByteString(xml_wrapper_.key_wrapper_suffix);
+}
+
+int32_t XMLToolCallingConverter::XMLParameterSuffix() {
+  if (json_format_ == JSONFormat::kDeepSeekXML) {
+    int32_t dsml_token_expr_id = DSMLToken();
+    if (dsml_token_expr_id >= 0) {
+      return Sequence({ByteString("</"), dsml_token_expr_id, ByteString("parameter>")});
+    }
+  }
+  return ByteString(xml_wrapper_.parameter_suffix);
+}
+
+int32_t XMLToolCallingConverter::DSMLToken() {
+  if (dsml_token_expr_id_ >= 0) {
+    return dsml_token_expr_id_;
+  }
+  dsml_token_expr_id_ = std::visit(
+      [this](const auto& arg) -> int32_t {
+        using T = std::decay_t<decltype(arg)>;
+        if constexpr (std::is_same_v<T, int32_t>) {
+          return builder_.AddTokenSet({arg});
+        } else if constexpr (std::is_same_v<T, std::string>) {
+          return ByteString(arg);
+        } else {
+          return -1;
+        }
+      },
+      custom_dsml_token_
+  );
+  return dsml_token_expr_id_;
 }
 
 std::optional<std::string> XMLToolCallingConverter::KimiK3TypeAttr(const SchemaSpecPtr& spec) {
@@ -201,6 +251,29 @@ std::optional<std::string> XMLToolCallingConverter::KimiK3TypeAttr(const SchemaS
   );
 }
 
+int32_t XMLToolCallingConverter::XMLString() {
+  int32_t expr_id = -1;
+  if (json_format_ == JSONFormat::kDeepSeekXML) {
+    expr_id = std::visit(
+        [this](const auto& arg) {
+          using T = std::decay_t<decltype(arg)>;
+          if constexpr (std::is_same_v<T, int32_t>) {
+            return builder_.AddCharacterClassStar({{0, 0x10ffff}});
+          } else if constexpr (std::is_same_v<T, std::string>) {
+            return TagDispatch(false, {"</" + arg + "parameter>"});
+          } else {
+            return -1;
+          }
+        },
+        custom_dsml_token_
+    );
+  }
+  if (expr_id < 0) {
+    expr_id = TagDispatch(false, {xml_wrapper_.parameter_suffix});
+  }
+  return expr_id;
+}
+
 void XMLToolCallingConverter::AddBasicRules() {
   // First add JSON basic rules. These should be in the inner layer of the XML format.
   XGRAMMAR_DCHECK(nested_object_level_ == 0);
@@ -213,7 +286,7 @@ void XMLToolCallingConverter::AddBasicRules() {
   // The outer part, xml format, is at level 1.
   nested_object_level_ = 1;
   // Add XML string rule
-  builder_.UpdateRuleBody(kXMLString, TagDispatch(false, {xml_wrapper_.parameter_suffix}));
+  builder_.UpdateRuleBody(kXMLString, XMLString());
   AddCache(kStringCacheKey, builder_.GetRuleId(kXMLString));
 
   // Add XML any rule
@@ -368,10 +441,7 @@ int32_t XMLToolCallingConverter::FormatPropertyKey(
     if (json_format_ == JSONFormat::kKimiK3XML) {
       pinned_type = KimiK3TypeAttr(schema);
     }
-    return Sequence(
-        {ByteString(xml_wrapper_.key_wrapper_prefix + EscapeAttrValue(key)),
-         XMLKeySuffix(pinned_type)}
-    );
+    return Sequence({XMLKeyPrefix(), ByteString(EscapeAttrValue(key)), XMLKeySuffix(pinned_type)});
   }
   return JSONSchemaConverter::FormatPropertyKey(key, schema);
 }
@@ -398,7 +468,7 @@ int32_t XMLToolCallingConverter::FormatProperty(
       elements.push_back(RuleRef(value_rule_id));
       elements.push_back(WhitespaceExpression());
     }
-    elements.push_back(ByteString(xml_wrapper_.parameter_suffix));
+    elements.push_back(XMLParameterSuffix());
     return Sequence(elements);
   }
   return JSONSchemaConverter::FormatProperty(key, value_rule_id, rule_name, idx, schema);
@@ -413,7 +483,7 @@ int32_t XMLToolCallingConverter::FormatOtherProperty(
 ) {
   if (nested_object_level_ <= 1) {
     std::vector<int32_t> elements = {
-        ByteString(xml_wrapper_.key_wrapper_prefix),
+        XMLKeyPrefix(),
         key_pattern_expr,
         XMLKeySuffix(json_format_ == JSONFormat::kKimiK3XML ? KimiK3TypeAttr(schema) : std::nullopt)
     };
@@ -428,7 +498,7 @@ int32_t XMLToolCallingConverter::FormatOtherProperty(
       elements.push_back(RuleRef(value_rule_id));
       elements.push_back(WhitespaceExpression());
     }
-    elements.push_back(ByteString(xml_wrapper_.parameter_suffix));
+    elements.push_back(XMLParameterSuffix());
     return Sequence(elements);
   }
   return JSONSchemaConverter::FormatOtherProperty(

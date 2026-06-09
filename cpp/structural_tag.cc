@@ -106,6 +106,17 @@ picojson::value JSONSchemaFormat::ToJSON() const {
   } else {
     obj["max_whitespace_cnt"] = picojson::value();
   }
+  picojson::object custom_tokens_obj;
+  for (const auto& [key, value] : custom_tokens) {
+    if (std::holds_alternative<std::string>(value)) {
+      custom_tokens_obj[key] = picojson::value(std::get<std::string>(value));
+    } else {
+      custom_tokens_obj[key] = std::get<TokenFormat>(value).ToJSON();
+    }
+  }
+  if (!custom_tokens_obj.empty()) {
+    obj["custom_tokens"] = picojson::value(std::move(custom_tokens_obj));
+  }
   return picojson::value(std::move(obj));
 }
 
@@ -137,8 +148,21 @@ picojson::value AnyTextFormat::ToJSON() const {
   return picojson::value(std::move(obj));
 }
 
-// These two constructors are defined here rather than inline because instantiating
-// vector<Format> against the still-incomplete Format variant is ill-formed under C++20.
+// These constructors are defined here rather than inline because instantiating vector against
+// incomplete type is ill-formed under C++20.
+JSONSchemaFormat::JSONSchemaFormat(
+    std::string json_schema,
+    std::string style,
+    bool any_order,
+    std::optional<int> max_whitespace_cnt,
+    std::vector<std::pair<std::string, std::variant<std::string, TokenFormat>>> custom_tokens
+)
+    : json_schema(std::move(json_schema)),
+      style(std::move(style)),
+      any_order(any_order),
+      max_whitespace_cnt(max_whitespace_cnt),
+      custom_tokens(std::move(custom_tokens)) {}
+
 SequenceFormat::SequenceFormat(std::vector<Format> elements) : elements(std::move(elements)) {}
 
 OrFormat::OrFormat(std::vector<Format> elements) : elements(std::move(elements)) {}
@@ -577,9 +601,37 @@ Result<JSONSchemaFormat, ISTError> StructuralTagParser::ParseJSONSchemaFormat(
     }
     max_whitespace_cnt = static_cast<int>(max_whitespace_cnt_it->second.get<int64_t>());
   }
+  std::vector<std::pair<std::string, std::variant<std::string, TokenFormat>>> custom_tokens;
+  auto custom_tokens_it = obj.find("custom_tokens");
+  if (custom_tokens_it != obj.end()) {
+    if (!custom_tokens_it->second.is<picojson::object>()) {
+      return ResultErr<ISTError>("custom_tokens must be an object");
+    }
+    for (const auto& [key, value] : custom_tokens_it->second.get<picojson::object>()) {
+      if (value.is<std::string>()) {
+        const std::string& s = value.get<std::string>();
+        if (s.empty()) {
+          return ResultErr<ISTError>("Custom token string must be non-empty");
+        }
+        custom_tokens.emplace_back(key, s);
+      } else if (value.is<picojson::object>()) {
+        auto tf = ParseTokenFormat(value.get<picojson::object>());
+        if (tf.IsErr()) {
+          return ResultErr<ISTError>(std::move(tf).UnwrapErr());
+        }
+        custom_tokens.emplace_back(key, std::move(tf).Unwrap());
+      } else {
+        return ResultErr<ISTError>("Custom token must be a string or a token");
+      }
+    }
+  }
   // here introduces a serialization/deserialization overhead; try to avoid it in the future.
   return ResultOk<JSONSchemaFormat>(
-      json_schema_it->second.serialize(false), style, any_order, max_whitespace_cnt
+      json_schema_it->second.serialize(false),
+      style,
+      any_order,
+      max_whitespace_cnt,
+      std::move(custom_tokens)
   );
 }
 
@@ -1335,6 +1387,14 @@ std::optional<ISTError> StructuralTagTokenResolver::ResolveFormat(Format* format
           return ResolveIntOrStringVec(arg.exclude_tokens, &arg.resolved_token_ids_);
         } else if constexpr (std::is_same_v<T, AnyTokensFormat>) {
           return ResolveIntOrStringVec(arg.exclude_tokens, &arg.resolved_exclude_token_ids_);
+        } else if constexpr (std::is_same_v<T, JSONSchemaFormat>) {
+          for (auto& [_, value] : arg.custom_tokens) {
+            if (std::holds_alternative<TokenFormat>(value)) {
+              auto err = ResolveTokenFormat(&std::get<TokenFormat>(value));
+              if (err) return err;
+            }
+          }
+          return std::nullopt;
         } else if constexpr (std::is_same_v<T, TokenTriggeredTagsFormat>) {
           auto err = ResolveIntOrStringVec(arg.trigger_tokens, &arg.resolved_trigger_token_ids_);
           if (err) return err;
@@ -1922,6 +1982,14 @@ Result<int, ISTError> StructuralTagGrammarConverter::VisitSub(const JSONSchemaFo
   if (!json_format.has_value()) {
     return ResultErr<ISTError>("Unsupported parsing type: " + format.style);
   }
+  std::unordered_map<std::string, std::variant<int32_t, std::string>> custom_tokens;
+  for (const auto& [key, value] : format.custom_tokens) {
+    if (std::holds_alternative<std::string>(value)) {
+      custom_tokens.emplace(key, std::get<std::string>(value));
+    } else {
+      custom_tokens.emplace(key, std::get<TokenFormat>(value).resolved_token_id_);
+    }
+  }
   // The whitespace cap comes from the JSONSchemaFormat node (per-tag).
   auto sub_grammar = GrammarNormalizer::Apply(JSONSchemaToGrammar(
       format.json_schema,
@@ -1931,7 +1999,8 @@ Result<int, ISTError> StructuralTagGrammarConverter::VisitSub(const JSONSchemaFo
       /*strict_mode=*/true,
       /*max_whitespace_cnt=*/format.max_whitespace_cnt,
       /*any_order=*/format.any_order,
-      /*json_format=*/*json_format
+      /*json_format=*/*json_format,
+      /*custom_tokens=*/custom_tokens
   ));
   auto added_root_rule_id = SubGrammarAdder().Apply(&grammar_builder_, sub_grammar);
   return ResultOk(added_root_rule_id);

@@ -194,6 +194,57 @@ def _is_grammar_accept_string(
     return grammar_matcher.is_terminated()
 
 
+def _is_grammar_accept_tokens(
+    grammar: Union[Grammar, str],
+    input_tokens: List[int],
+    tokenizer_info: TokenizerInfo,
+    *,
+    debug_print: bool = False,
+    print_time: bool = False,
+    require_termination: bool = True,
+) -> bool:
+    """Check if a grammar accepts a string. For test purposes.
+
+    Parameters
+    ----------
+    grammar : Union[Grammar, str]
+        The grammar to check. Can be either a Grammar object or a BNF grammar string.
+    input_tokens : List[int]
+        The input sequence of tokens to check.
+    tokenizer_info: TokenizerInfo
+        The tokenizer info.
+    debug_print : bool, default: False
+        Whether to print debug information during matching.
+    print_time : bool, default: False
+        Whether to print timing information.
+
+    Returns
+    -------
+    bool
+        True if the grammar accepts the sequence, False otherwise.
+    """
+    grammar_matcher = _get_matcher_from_grammar_and_tokenizer_info(grammar, tokenizer_info)
+
+    if print_time:
+        start = time.monotonic_ns()
+
+    accepted = all(
+        grammar_matcher.accept_token(token, debug_print=debug_print) for token in input_tokens
+    )
+
+    if print_time:
+        end = time.monotonic_ns()
+        print(f"Accepting {input_tokens}, result: {accepted}, time: {(end - start) / 1e3} us")
+
+    if not accepted:
+        return False
+
+    if not require_termination:
+        return True
+
+    return grammar_matcher.is_terminated()
+
+
 def _is_rule_fsm_accept_string(grammar: Grammar, rule_id: int, input_str: str) -> bool:
     """Check whether a rule's already-built FSM accepts a string."""
     return bool(_core.testing._is_rule_fsm_accept_string(grammar._handle, rule_id, input_str))
