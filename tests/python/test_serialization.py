@@ -26,10 +26,11 @@ root_rule ::= rule1 "a"
 def construct_tokenizer_info():
     """Construct a TokenizerInfo object for testing."""
     return xgr.TokenizerInfo(
-        ["1", "212", "a", "A", "b", "一", "-", "aBc", "abc"],
+        ["1", "212", "a", "A", "b", "一", "-", "aBc", "abc", "ABC"],
         vocab_type=xgr.VocabType.BYTE_FALLBACK,
-        vocab_size=10,
+        vocab_size=11,
         stop_token_ids=[0, 1],
+        additional_special_token_ids=[9],
         add_prefix_space=True,
     )
 
@@ -146,9 +147,9 @@ def test_serialize_tokenizer_info():
     tokenizer_info = construct_tokenizer_info()
     serialized = tokenizer_info.serialize_json()
     expected_json = (
-        '{"vocab_type":1,"vocab_size":10,"add_prefix_space":true,'
-        '"stop_token_ids":[0,1],"special_token_ids":[9],'
-        '"decoded_vocab":["1","212","a","A","b","\\u00e4\\u00b8\\u0080","-","aBc","abc"],'
+        '{"vocab_type":1,"vocab_size":11,"add_prefix_space":true,'
+        '"stop_token_ids":[0,1],"special_token_ids":[9,10],'
+        '"decoded_vocab":["1","212","a","A","b","\\u00e4\\u00b8\\u0080","-","aBc","abc","ABC"],'
         '"sorted_decoded_vocab":[[6,"-"],[3,"A"],[2,"a"],[7,"aBc"],[8,"abc"],[4,"b"],[5,"\\u00e4\\u00b8\\u0080"]],'
         '"trie_subtree_nodes_range":[1,2,5,4,5,6,7],'
         '"__VERSION__":"v16"}'
@@ -266,9 +267,10 @@ def test_serialize_compiled_grammar():
         },
         "tokenizer_metadata": {
             "vocab_type": 1,
-            "vocab_size": 10,
+            "vocab_size": 11,
             "add_prefix_space": True,
             "stop_token_ids": [0, 1],
+            "additional_special_token_ids": [9],
         },
         "__VERSION__": "v16",
     }

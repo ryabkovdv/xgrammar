@@ -94,6 +94,7 @@ class TokenizerInfo(XGRObject):
         *,
         vocab_size: Optional[int] = None,
         stop_token_ids: Optional[Union[List[int], int]] = None,
+        additional_special_token_ids: Optional[Union[List[int], int]] = None,
         add_prefix_space: bool = False,
     ) -> None:
         """Construct the tokenizer info.
@@ -113,14 +114,24 @@ class TokenizerInfo(XGRObject):
             The stop token ids. If not provided, the stop token ids will be auto detected (but may not
             be correct).
 
+        additional_special_token_ids : Optional[List[int]], default: None
+            The additional special token ids (in addition to auto detected ones).
+
         add_prefix_space : bool, default: False
             Whether the tokenizer will prepend a space before the text in the tokenization process.
         """
         if isinstance(stop_token_ids, int):
             stop_token_ids = [stop_token_ids]
+        if isinstance(additional_special_token_ids, int):
+            additional_special_token_ids = [additional_special_token_ids]
         self._init_handle(
             _core.TokenizerInfo(
-                encoded_vocab, vocab_type.value, vocab_size, stop_token_ids, add_prefix_space
+                encoded_vocab,
+                vocab_type.value,
+                vocab_size,
+                stop_token_ids,
+                additional_special_token_ids,
+                add_prefix_space,
             )
         )
 
@@ -242,6 +253,7 @@ class TokenizerInfo(XGRObject):
         *,
         vocab_size: Optional[int] = None,
         stop_token_ids: Optional[Union[List[int], int]] = None,
+        additional_special_token_ids: Optional[Union[List[int], int]] = None,
     ) -> "TokenizerInfo":
         """Construct the tokenizer info from the huggingface tokenizer. This constructor supports
         various tokenizer backends, including the huggingface fast tokenizer and tiktoken tokenizer.
@@ -280,6 +292,9 @@ class TokenizerInfo(XGRObject):
         stop_token_ids : Optional[List[int]], default: None
             The stop token ids. If not provided, the eos_token_id of the tokenizer will be used.
 
+        additional_special_token_ids : Optional[List[int]], default: None
+            The additional special token ids (in addition to auto detected ones).
+
         Returns
         -------
         tokenizer_info : TokenizerInfo
@@ -289,6 +304,8 @@ class TokenizerInfo(XGRObject):
             stop_token_ids = [stop_token_ids]
         if isinstance(stop_token_ids, list) and len(stop_token_ids) == 0:
             raise ValueError("stop_token_ids cannot be empty")
+        if isinstance(additional_special_token_ids, int):
+            additional_special_token_ids = [additional_special_token_ids]
 
         try:
             vocab_dict = tokenizer.get_vocab()
@@ -356,6 +373,7 @@ class TokenizerInfo(XGRObject):
                 vocab_type=metadata["vocab_type"],
                 vocab_size=vocab_size,
                 stop_token_ids=stop_token_ids,
+                additional_special_token_ids=additional_special_token_ids,
                 add_prefix_space=metadata["add_prefix_space"],
             )
 
@@ -382,6 +400,7 @@ class TokenizerInfo(XGRObject):
                 vocab_type,
                 vocab_size=vocab_size,
                 stop_token_ids=stop_token_ids,
+                additional_special_token_ids=additional_special_token_ids,
                 add_prefix_space=False,
             )
 
@@ -419,6 +438,7 @@ class TokenizerInfo(XGRObject):
                 vocab_type=vocab_type,
                 vocab_size=vocab_size,
                 stop_token_ids=stop_token_ids,
+                additional_special_token_ids=additional_special_token_ids,
                 add_prefix_space=True,
             )
 

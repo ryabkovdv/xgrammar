@@ -22,11 +22,15 @@ std::string PrintTokenByIds(
     const std::vector<int32_t>& token_ids, const TokenizerInfo& tokenizer_info, int max_print_num
 ) {
   std::stringstream ss;
-  const auto& sorted_decoded_vocab = tokenizer_info.GetDecodedVocab();
+  const auto& decoded_vocab = tokenizer_info.GetDecodedVocab();
   ss << "[";
   int print_num = std::min(static_cast<int>(token_ids.size()), max_print_num);
   for (int i = 0; i < print_num; ++i) {
-    ss << "#" << token_ids[i] << " <" << EscapeString(sorted_decoded_vocab[token_ids[i]]) << ">";
+    int32_t token_id = token_ids[i];
+    std::string token = token_id < static_cast<int32_t>(decoded_vocab.size())
+                            ? EscapeString(decoded_vocab[token_id])
+                            : "";
+    ss << "#" << token_id << " <" << token << ">";
     if (i < print_num - 1) {
       ss << ", ";
     }

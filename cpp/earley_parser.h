@@ -631,15 +631,23 @@ class EarleyParser {
    * \brief Scan a token edge: check if token_id matches any kToken or kExcludeToken edge from
    * state.
    */
-  void ScanAtomicToken(const ParserState& state, int32_t token_id);
+  void ScanAtomicToken(
+      const ParserState& state, int32_t token_id, bool restrict_to_token_edges = false
+  );
 
   /*!
    * \brief Advance the parser by accepting a whole token via kToken/kExcludeToken edges.
    * \param token_id The token ID to accept.
    * \param debug_print Whether to print debug info.
+   * \param restrict_to_token_edges Whether to restrict matching only to kToken edges.
    * \return True if any state advanced, false otherwise.
    */
-  bool AdvanceAtomicToken(int32_t token_id, bool debug_print = false, int32_t token_char_count = 0);
+  bool AdvanceAtomicToken(
+      int32_t token_id,
+      bool debug_print = false,
+      bool restrict_to_token_edges = false,
+      int32_t token_char_count = 0
+  );
 
   /*!
    * \brief Enqueue the state into the queue.

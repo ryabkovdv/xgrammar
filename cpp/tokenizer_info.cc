@@ -269,6 +269,7 @@ TokenizerInfo::Impl::Impl(
     VocabType vocab_type,
     std::optional<int> vocab_size,
     std::optional<std::vector<int32_t>> stop_token_ids,
+    const std::vector<int32_t>& additional_special_token_ids,
     bool add_prefix_space
 )
     : vocab_type_(vocab_type),
@@ -283,7 +284,10 @@ TokenizerInfo::Impl::Impl(
         (stop_token_ids &&
          std::find(stop_token_ids->begin(), stop_token_ids->end(), i) != stop_token_ids->end())) {
       stop_token_ids_.push_back(i);
-    } else if (IsSpecialToken(token)) {
+    } else if (IsSpecialToken(token) ||
+               std::find(
+                   additional_special_token_ids.begin(), additional_special_token_ids.end(), i
+               ) != additional_special_token_ids.end()) {
       special_token_ids_.push_back(i);
     } else {
       sorted_decoded_vocab_.push_back({i, token});
@@ -358,6 +362,14 @@ picojson::value TokenizerInfo::Impl::DumpMetadataValue() const {
     stop_token_ids_array.push_back(picojson::value(static_cast<int64_t>(id)));
   }
   obj["stop_token_ids"] = picojson::value(std::move(stop_token_ids_array));
+  picojson::array additional_special_token_ids_array;
+  for (auto id : special_token_ids_) {
+    if (static_cast<size_t>(id) < decoded_vocab_.size() && !decoded_vocab_[id].empty()) {
+      additional_special_token_ids_array.push_back(picojson::value(static_cast<int64_t>(id)));
+    }
+  }
+  obj["additional_special_token_ids"] =
+      picojson::value(std::move(additional_special_token_ids_array));
 
   return picojson::value(std::move(obj));
 }
@@ -413,6 +425,37 @@ std::optional<std::runtime_error> TokenizerInfo::Impl::CheckMetadataMatch(
   if (stop_token_ids_vec != stop_token_ids_) {
     return std::runtime_error("Stop token ids mismatch");
   }
+  std::vector<int32_t> additional_special_token_ids_vec;
+  if (object.find("additional_special_token_ids") != object.end()) {
+    auto additional_special_token_ids =
+        object.at("additional_special_token_ids").get<picojson::array>();
+    additional_special_token_ids_vec.reserve(additional_special_token_ids.size());
+    for (const auto& id : additional_special_token_ids) {
+      if (!id.is<int64_t>()) {
+        return std::runtime_error("Special token id is not an integer");
+      }
+      additional_special_token_ids_vec.push_back(static_cast<int32_t>(id.get<int64_t>()));
+    }
+  }
+  size_t ast_ptr = 0;
+  for (size_t i = 0; i < special_token_ids_.size(); ++i) {
+    int32_t token_id = special_token_ids_[i];
+    if (ast_ptr < additional_special_token_ids_vec.size() &&
+        additional_special_token_ids_vec[ast_ptr] == token_id) {
+      ++ast_ptr;
+      continue;
+    }
+    if (token_id >= static_cast<int32_t>(decoded_vocab_.size())) {
+      continue;
+    }
+    if (decoded_vocab_[token_id].empty()) {
+      continue;
+    }
+    return std::runtime_error("Additional special token ids mismatch");
+  }
+  if (ast_ptr < additional_special_token_ids_vec.size()) {
+    return std::runtime_error("Additional special token ids mismatch");
+  }
   return std::nullopt;
 }
 
@@ -447,8 +490,23 @@ std::shared_ptr<TokenizerInfo::Impl> TokenizerInfo::Impl::FromVocabAndMetadata(
     XGRAMMAR_CHECK(id.is<int64_t>()) << "Stop token id is not an integer";
     stop_token_ids.push_back(static_cast<int32_t>(id.get<int64_t>()));
   }
+
+  std::vector<int32_t> additional_special_token_ids;
+  if (obj.count("additional_special_token_ids")) {
+    XGRAMMAR_CHECK(obj["additional_special_token_ids"].is<picojson::array>())
+        << "Invalid 'additional_special_token_ids' in metadata";
+    for (const auto& id : obj["additional_special_token_ids"].get<picojson::array>()) {
+      XGRAMMAR_CHECK(id.is<int64_t>()) << "Special token id is not an integer";
+      additional_special_token_ids.push_back(static_cast<int32_t>(id.get<int64_t>()));
+    }
+  }
   return std::make_shared<Impl>(
-      encoded_vocab, vocab_type, vocab_size, stop_token_ids, add_prefix_space
+      encoded_vocab,
+      vocab_type,
+      vocab_size,
+      std::move(stop_token_ids),
+      additional_special_token_ids,
+      add_prefix_space
   );
 }
 
@@ -477,7 +535,29 @@ TokenizerInfo::TokenizerInfo(
     bool add_prefix_space
 )
     : pimpl_(std::make_shared<Impl>(
-          encoded_vocab, vocab_type, vocab_size, stop_token_ids, add_prefix_space
+          encoded_vocab,
+          vocab_type,
+          vocab_size,
+          std::move(stop_token_ids),
+          std::vector<int32_t>{},
+          add_prefix_space
+      )) {}
+
+TokenizerInfo::TokenizerInfo(
+    const std::vector<std::string>& encoded_vocab,
+    VocabType vocab_type,
+    std::optional<int> vocab_size,
+    std::optional<std::vector<int32_t>> stop_token_ids,
+    const std::vector<int32_t>& additional_special_token_ids,
+    bool add_prefix_space
+)
+    : pimpl_(std::make_shared<Impl>(
+          encoded_vocab,
+          vocab_type,
+          vocab_size,
+          std::move(stop_token_ids),
+          additional_special_token_ids,
+          add_prefix_space
       )) {}
 
 int TokenizerInfo::GetVocabSize() const { return pimpl_->GetVocabSize(); }

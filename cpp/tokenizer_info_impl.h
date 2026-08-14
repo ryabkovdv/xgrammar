@@ -23,13 +23,14 @@ class TokenizerInfo::Impl {
       VocabType vocab_type,
       std::optional<int> vocab_size,
       std::optional<std::vector<int32_t>> stop_token_ids,
+      const std::vector<int32_t>& additional_special_token_ids,
       bool add_prefix_space
   );
 
   VocabType GetVocabType() const { return vocab_type_; }
   bool GetAddPrefixSpace() const { return add_prefix_space_; }
   int GetVocabSize() const { return vocab_size_; }
-  const std::vector<std::string>& GetDecodedVocab() { return decoded_vocab_; }
+  const std::vector<std::string>& GetDecodedVocab() const { return decoded_vocab_; }
   const std::vector<int32_t>& GetStopTokenIds() const { return stop_token_ids_; }
   const std::vector<int32_t>& GetSpecialTokenIds() const { return special_token_ids_; }
   const std::vector<std::pair<int32_t, std::string>>& GetSortedDecodedVocab() const {

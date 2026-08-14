@@ -219,15 +219,15 @@ def test_vocab_conversion(tokenizer_path: str, token_ids: List[int], raw_tokens:
 tokenizer_path__metadata_str = [
     (
         "microsoft/Phi-3-small-8k-instruct",
-        '{"vocab_type":0,"vocab_size":100352,"add_prefix_space":false,"stop_token_ids":[100257]}',
+        '{"vocab_type":0,"vocab_size":100352,"add_prefix_space":false,"stop_token_ids":[100257],"additional_special_token_ids":[]}',
     ),
     (
         "meta-llama/Llama-2-7b-chat-hf",
-        '{"vocab_type":1,"vocab_size":32000,"add_prefix_space":true,"stop_token_ids":[2]}',
+        '{"vocab_type":1,"vocab_size":32000,"add_prefix_space":true,"stop_token_ids":[2],"additional_special_token_ids":[]}',
     ),
     (
         "meta-llama/Meta-Llama-3-8B-Instruct",
-        '{"vocab_type":2,"vocab_size":128256,"add_prefix_space":false,"stop_token_ids":[128009]}',
+        '{"vocab_type":2,"vocab_size":128256,"add_prefix_space":false,"stop_token_ids":[128009],"additional_special_token_ids":[]}',
     ),
 ]
 

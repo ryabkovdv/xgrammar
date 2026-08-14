@@ -26,6 +26,7 @@ TokenizerInfo TokenizerInfo_Init(
     int vocab_type,
     std::optional<int> vocab_size,
     std::optional<std::vector<int32_t>> stop_token_ids,
+    std::optional<std::vector<int32_t>> additional_special_token_ids,
     bool add_prefix_space
 ) {
   XGRAMMAR_CHECK(vocab_type == 0 || vocab_type == 1 || vocab_type == 2)
@@ -34,7 +35,8 @@ TokenizerInfo TokenizerInfo_Init(
       encoded_vocab,
       static_cast<VocabType>(vocab_type),
       vocab_size,
-      stop_token_ids,
+      std::move(stop_token_ids),
+      std::move(additional_special_token_ids).value_or(std::vector<int32_t>{}),
       add_prefix_space
   );
 }

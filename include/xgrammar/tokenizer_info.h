@@ -35,6 +35,15 @@ class TokenizerInfo {
       bool add_prefix_space = false
   );
 
+  TokenizerInfo(
+      const std::vector<std::string>& encoded_vocab,
+      VocabType vocab_type,
+      std::optional<int> vocab_size,
+      std::optional<std::vector<int32_t>> stop_token_ids,
+      const std::vector<int32_t>& additional_special_token_ids,
+      bool add_prefix_space = false
+  );
+
   VocabType GetVocabType() const;
   bool GetAddPrefixSpace() const;
   int GetVocabSize() const;

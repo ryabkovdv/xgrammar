@@ -106,9 +106,9 @@ class GrammarMatcherForTokenMaskCache : public EarleyParser {
    * \brief Compute sorted vocab indices accepted by token edges at the current FSM state.
    * Token(ids) edges accept listed token IDs.
    * ExcludeToken(ids) edges accept all tokens except listed IDs.
-   * \return Sorted, deduplicated vector of accepted sorted vocab indices.
+   * \return Sorted, deduplicated vectors of accepted sorted vocab indices and special token IDs.
    */
-  const std::vector<int32_t>& GetTokenEdgeAcceptedIndices();
+  std::pair<const std::vector<int32_t>&, const std::vector<int32_t>&> GetTokenEdgeAcceptedIndices();
 
   // The id of the initial rule.
   int32_t init_rule_id_;
@@ -141,6 +141,7 @@ class GrammarMatcherForTokenMaskCache : public EarleyParser {
   std::vector<bool> tmp_can_reach_end_prefix_or_stack_;
   // Temporary data for GetTokenEdgeAcceptedIndices.
   std::vector<int32_t> tmp_token_edge_accepted_;
+  std::vector<int32_t> tmp_token_edge_accepted_special_token_ids_;
   std::vector<int32_t> tmp_token_edge_excluded_;
 };
 
@@ -719,11 +720,13 @@ void GrammarMatcherForTokenMaskCache::GetFirstCharacterMask(std::bitset<256>& fi
   }
 }
 
-const std::vector<int32_t>& GrammarMatcherForTokenMaskCache::GetTokenEdgeAcceptedIndices() {
+std::pair<const std::vector<int32_t>&, const std::vector<int32_t>&>
+GrammarMatcherForTokenMaskCache::GetTokenEdgeAcceptedIndices() {
   // Compute sorted vocab indices accepted by Token(ids) and ExcludeToken(ids) edges.
   // Result is stored in tmp_token_edge_accepted_.
 
   tmp_token_edge_accepted_.clear();
+  tmp_token_edge_accepted_special_token_ids_.clear();
   tmp_token_edge_excluded_.clear();
 
   XGRAMMAR_DCHECK(grammar_->per_rule_fsms[init_rule_id_].has_value());
@@ -744,6 +747,8 @@ const std::vector<int32_t>& GrammarMatcherForTokenMaskCache::GetTokenEdgeAccepte
         XGRAMMAR_DCHECK(tid >= 0 && tid < static_cast<int32_t>(tid_to_sorted.size()));
         if (tid_to_sorted[tid] >= 0) {
           tmp_token_edge_accepted_.push_back(tid_to_sorted[tid]);
+        } else {
+          tmp_token_edge_accepted_special_token_ids_.push_back(tid);
         }
       }
     } else if (edge.IsExcludeToken()) {
@@ -759,20 +764,6 @@ const std::vector<int32_t>& GrammarMatcherForTokenMaskCache::GetTokenEdgeAccepte
     }
   }
 
-  // Token-only: result = token_accepted
-  if (!has_exclude_token) {
-    if (!tmp_token_edge_accepted_.empty()) {
-      std::sort(tmp_token_edge_accepted_.begin(), tmp_token_edge_accepted_.end());
-      tmp_token_edge_accepted_.erase(
-          std::unique(tmp_token_edge_accepted_.begin(), tmp_token_edge_accepted_.end()),
-          tmp_token_edge_accepted_.end()
-      );
-    }
-    return tmp_token_edge_accepted_;
-  }
-
-  // ExcludeToken: result = [0, sorted_size) - (excluded - token_accepted)
-  // Token(ids) overrides ExcludeToken(ids) when both present.
   if (!tmp_token_edge_accepted_.empty()) {
     std::sort(tmp_token_edge_accepted_.begin(), tmp_token_edge_accepted_.end());
     tmp_token_edge_accepted_.erase(
@@ -780,6 +771,28 @@ const std::vector<int32_t>& GrammarMatcherForTokenMaskCache::GetTokenEdgeAccepte
         tmp_token_edge_accepted_.end()
     );
   }
+
+  if (!tmp_token_edge_accepted_special_token_ids_.empty()) {
+    std::sort(
+        tmp_token_edge_accepted_special_token_ids_.begin(),
+        tmp_token_edge_accepted_special_token_ids_.end()
+    );
+    tmp_token_edge_accepted_special_token_ids_.erase(
+        std::unique(
+            tmp_token_edge_accepted_special_token_ids_.begin(),
+            tmp_token_edge_accepted_special_token_ids_.end()
+        ),
+        tmp_token_edge_accepted_special_token_ids_.end()
+    );
+  }
+
+  // Token-only: result = token_accepted
+  if (!has_exclude_token) {
+    return {tmp_token_edge_accepted_, tmp_token_edge_accepted_special_token_ids_};
+  }
+
+  // ExcludeToken: result = [0, sorted_size) - (excluded - token_accepted)
+  // Token(ids) overrides ExcludeToken(ids) when both present.
   std::sort(tmp_token_edge_excluded_.begin(), tmp_token_edge_excluded_.end());
   tmp_token_edge_excluded_.erase(
       std::unique(tmp_token_edge_excluded_.begin(), tmp_token_edge_excluded_.end()),
@@ -787,7 +800,7 @@ const std::vector<int32_t>& GrammarMatcherForTokenMaskCache::GetTokenEdgeAccepte
   );
   IntsetDifference(&tmp_token_edge_excluded_, tmp_token_edge_accepted_);
   IntsetComplement(&tmp_token_edge_accepted_, sorted_size, tmp_token_edge_excluded_);
-  return tmp_token_edge_accepted_;
+  return {tmp_token_edge_accepted_, tmp_token_edge_accepted_special_token_ids_};
 }
 
 AdaptiveTokenMask GrammarMatcherForTokenMaskCache::GetAdaptiveTokenMask(bool is_root_rule) {
@@ -850,7 +863,8 @@ AdaptiveTokenMask GrammarMatcherForTokenMaskCache::GetAdaptiveTokenMask(bool is_
   GetFirstCharacterMask(first_character_mask);
 
   // Token edge accepted indices (for byte path skip + merge).
-  const auto& token_edge_accepted = GetTokenEdgeAcceptedIndices();
+  const auto& [token_edge_accepted, token_edge_accepted_special_token_ids] =
+      GetTokenEdgeAcceptedIndices();
 
   // Byte path: skip tokens already accepted by token edges.
   bool rejected_filled;
@@ -873,8 +887,9 @@ AdaptiveTokenMask GrammarMatcherForTokenMaskCache::GetAdaptiveTokenMask(bool is_
     }
     IntsetDifference(&tmp_rejected_indices_, token_edge_accepted);
   }
-  if (rejected_filled) {
+  if (rejected_filled && token_edge_accepted_special_token_ids.empty()) {
     auto return_value = AdaptiveTokenMask(
+        AdaptiveTokenMask::WithRejected{},
         tokenizer_info_.GetVocabSize(),
         tokenizer_info_.GetSortedDecodedVocab(),
         tmp_accepted_indices_,
@@ -924,6 +939,7 @@ AdaptiveTokenMask GrammarMatcherForTokenMaskCache::GetAdaptiveTokenMask(bool is_
           fsm.GetNodeNum(),
           fsm.GetEdgeNum(),
           AdaptiveTokenMask(
+              AdaptiveTokenMask::WithRejected{},
               tokenizer_info_.GetVocabSize(),
               tokenizer_info_.GetSortedDecodedVocab(),
               accepted_indices_without_lookahead,
@@ -945,9 +961,11 @@ AdaptiveTokenMask GrammarMatcherForTokenMaskCache::GetAdaptiveTokenMask(bool is_
     return return_value;
   } else {
     auto return_value = AdaptiveTokenMask(
+        AdaptiveTokenMask::WithoutRejected{},
         tokenizer_info_.GetVocabSize(),
         tokenizer_info_.GetSortedDecodedVocab(),
         tmp_accepted_indices_,
+        token_edge_accepted_special_token_ids,
         tmp_uncertain_indices_
     );
 
@@ -982,9 +1000,11 @@ AdaptiveTokenMask GrammarMatcherForTokenMaskCache::GetAdaptiveTokenMask(bool is_
           fsm.GetNodeNum(),
           fsm.GetEdgeNum(),
           AdaptiveTokenMask(
+              AdaptiveTokenMask::WithoutRejected{},
               tokenizer_info_.GetVocabSize(),
               tokenizer_info_.GetSortedDecodedVocab(),
               accepted_indices_without_lookahead,
+              token_edge_accepted_special_token_ids,
               tmp_uncertain_indices_
           )
       );
