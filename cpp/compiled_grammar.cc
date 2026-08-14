@@ -16,6 +16,7 @@ namespace xgrammar {
 /******************* AdaptiveTokenMask *******************/
 
 AdaptiveTokenMask::AdaptiveTokenMask(
+    WithRejected,
     size_t vocab_size,
     const std::vector<std::pair<int32_t, std::string>>& sorted_decoded_vocab,
     const std::vector<int32_t>& accepted_indices,
@@ -45,19 +46,26 @@ AdaptiveTokenMask::AdaptiveTokenMask(
 }
 
 AdaptiveTokenMask::AdaptiveTokenMask(
+    WithoutRejected,
     size_t vocab_size,
     const std::vector<std::pair<int32_t, std::string>>& sorted_decoded_vocab,
     const std::vector<int32_t>& accepted_indices,
+    const std::vector<int32_t>& accepted_special_token_ids,
     const std::vector<int32_t>& uncertain_indices
 ) {
   auto size_acc = accepted_indices.size();
 
-  store_type = size_acc >= USE_BITSET_THRESHOLD ? StoreType::kAcceptedBitset : StoreType::kAccepted;
+  store_type = !accepted_special_token_ids.empty() || size_acc >= USE_BITSET_THRESHOLD
+                   ? StoreType::kAcceptedBitset
+                   : StoreType::kAccepted;
 
   if (store_type == StoreType::kAcceptedBitset) {
     accepted_bitset = DynamicBitset(vocab_size);
     for (auto idx : accepted_indices) {
       accepted_bitset.Set(sorted_decoded_vocab[idx].first, true);
+    }
+    for (auto id : accepted_special_token_ids) {
+      accepted_bitset.Set(id, true);
     }
   } else {
     XGRAMMAR_DCHECK(store_type == StoreType::kAccepted);
@@ -70,7 +78,9 @@ std::string AdaptiveTokenMask::Print(const TokenizerInfo& tokenizer_info) const 
   constexpr int kMaxPrintTokens = 100;
   std::stringstream ss;
   const auto& sorted_decoded_vocab = tokenizer_info.GetSortedDecodedVocab();
+  const auto& tid_to_sorted = tokenizer_info->GetTokenIdToSortedVocabIndex();
   std::vector<int32_t> accepted_indices;
+  std::vector<int32_t> accepted_special_token_ids;
   std::vector<int32_t> rejected_indices;
   std::unordered_set<int32_t> uncertain_indices_set(
       uncertain_indices.begin(), uncertain_indices.end()
@@ -80,11 +90,19 @@ std::string AdaptiveTokenMask::Print(const TokenizerInfo& tokenizer_info) const 
   rejected_indices.reserve(sorted_decoded_vocab.size());
 
   if (store_type == StoreType::kAcceptedBitset) {
-    for (int i = 0; i < static_cast<int>(sorted_decoded_vocab.size()); ++i) {
+    int vocab_size = tokenizer_info.GetVocabSize();
+    for (int tid = 0; tid < vocab_size; ++tid) {
+      int i = tid_to_sorted[tid];
+      if (i < 0) {
+        if (accepted_bitset[tid]) {
+          accepted_special_token_ids.push_back(tid);
+        }
+        continue;
+      }
       if (uncertain_indices_set.count(i)) {
         continue;
       }
-      if (accepted_bitset[sorted_decoded_vocab[i].first]) {
+      if (accepted_bitset[tid]) {
         accepted_indices.push_back(i);
       } else {
         rejected_indices.push_back(i);
@@ -129,13 +147,15 @@ std::string AdaptiveTokenMask::Print(const TokenizerInfo& tokenizer_info) const 
                                  : store_type == StoreType::kAccepted     ? "Accepted"
                                                                           : "Rejected";
 
-  ss << "AdaptiveTokenMask(num_tokens=" << sorted_decoded_vocab.size()
-     << ", accepted_num=" << accepted_indices.size() << ", rejected_num=" << rejected_indices.size()
+  ss << "AdaptiveTokenMask(num_tokens="
+     << sorted_decoded_vocab.size() + accepted_special_token_ids.size()
+     << ", accepted_num=" << accepted_indices.size() + accepted_special_token_ids.size()
+     << ", rejected_num=" << rejected_indices.size()
      << ", uncertain_num=" << uncertain_indices.size() << ", storage_type=" << storage_type_str
      << ",\n";
 
   // Convert indices to token ids for printing
-  std::vector<int32_t> accepted_token_ids;
+  std::vector<int32_t> accepted_token_ids = accepted_special_token_ids;
   std::vector<int32_t> rejected_token_ids;
   std::vector<int32_t> uncertain_token_ids;
   accepted_token_ids.reserve(accepted_indices.size());

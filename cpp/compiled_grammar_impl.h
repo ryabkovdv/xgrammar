@@ -59,10 +59,14 @@ struct AdaptiveTokenMask {
 
   std::vector<int32_t> uncertain_indices;
 
+  struct WithRejected {};
+  struct WithoutRejected {};
+
   /*! \brief Default constructor. Only for deserialization. */
   AdaptiveTokenMask() = default;
 
   AdaptiveTokenMask(
+      WithRejected,
       size_t vocab_size,
       const std::vector<std::pair<int32_t, std::string>>& sorted_decoded_vocab,
       const std::vector<int32_t>& accepted_indices,
@@ -71,9 +75,11 @@ struct AdaptiveTokenMask {
   );
 
   AdaptiveTokenMask(
+      WithoutRejected,
       size_t vocab_size,
       const std::vector<std::pair<int32_t, std::string>>& sorted_decoded_vocab,
       const std::vector<int32_t>& accepted_indices,
+      const std::vector<int32_t>& accepted_special_token_ids,
       const std::vector<int32_t>& uncertain_indices
   );
 
