@@ -81,6 +81,22 @@ class RegexFSMBuilder {
   );
 
   /*!
+   * \brief Converts a regex string to a FSM, then replaces characters from the escape map with the
+   * escape sequences in every character transition.
+   * \param regex The regex string.
+   * \param escape_map The map from characters to FSMWithStartEnd of escape sequence.
+   * \param builder See Build().
+   * \param rule_hint See Build().
+   * \return The FSM with start and end states.
+   */
+  static Result<FSMWithStartEnd> BuildWithEscapedChars(
+      const std::string& regex,
+      const std::unordered_map<int, FSMWithStartEnd>& escape_map,
+      GrammarBuilder* builder = nullptr,
+      const std::string& rule_hint = ""
+  );
+
+  /*!
    * \brief Check whether the regex matches the empty string. Only parses the regex; no FSM is
    * built, so this is cheap even for regexes with huge bounded repetitions.
    */

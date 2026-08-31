@@ -1599,6 +1599,108 @@ Result<FSMWithStartEnd> RegexFSMBuilder::BuildWithForbiddenChars(
   return ResultOk(FSMWithStartEnd(new_fsm, fsm_wse.GetStart(), fsm_wse.GetEnds()));
 }
 
+Result<FSMWithStartEnd> RegexFSMBuilder::BuildWithEscapedChars(
+    const std::string& regex,
+    const std::unordered_map<int, FSMWithStartEnd>& _escape_map,
+    GrammarBuilder* builder,
+    const std::string& rule_hint
+) {
+  static const auto escape_map = [] {
+    std::unordered_map<int, FSMWithStartEnd> escaped_chars;
+    for (int c = 0x00; c < 0x80; ++c) {
+      std::string regex;
+      switch (c) {
+        case '\b':
+          regex = R"(\\b)";
+          break;
+        case '\t':
+          regex = R"(\\t)";
+          break;
+        case '\n':
+          regex = R"(\\n)";
+          break;
+        case '\f':
+          regex = R"(\\f)";
+          break;
+        case '\r':
+          regex = R"(\\r)";
+          break;
+        case '"':
+          regex = R"(\\")";
+          break;
+        case '\\':
+          regex = R"(\\\\)";
+          break;
+        default:
+          if (c >= 0x20) {
+            continue;
+          }
+
+          int q = c / 0x10;
+          int r = c % 0x10;
+          regex = R"(\\u00)";
+          regex += '0' + q;
+          if (r < 0xA) {
+            regex += '0' + r;
+          } else {
+            regex += '[';
+            regex += 'A' + (r - 0xA);
+            regex += 'a' + (r - 0xA);
+            regex += ']';
+          }
+          break;
+      }
+      auto build_result = RegexFSMBuilder::Build(regex);
+      XGRAMMAR_ICHECK(build_result.IsOk());
+      escaped_chars[c] = std::move(build_result).Unwrap().SimplifyEpsilon().MergeEquivalentStates();
+    }
+    return escaped_chars;
+  }();
+
+  auto build_result = Build(regex, builder, rule_hint);
+  if (build_result.IsErr() || escape_map.empty()) {
+    return build_result;
+  }
+  auto fsm_wse = std::move(build_result).Unwrap();
+  const auto& fsm = fsm_wse.GetFsm();
+  FSM new_fsm(fsm_wse.NumStates());
+  new_fsm.SetEdgeAuxData(std::vector<int32_t>(fsm.GetEdgeAuxData()));
+  std::vector<int> state_mapping;
+  for (int state = 0; state < fsm_wse.NumStates(); ++state) {
+    for (const auto& edge : fsm.GetEdges(state)) {
+      if (!edge.IsCharRange()) {
+        new_fsm.AddEdge(state, edge.target, edge.min, edge.max);
+        continue;
+      }
+      // Split the character range into the sub-ranges of allowed characters and escape sequences.
+      int range_start = -1;
+      for (int c = edge.min; c <= edge.max; ++c) {
+        auto it = escape_map.find(c);
+        if (it == escape_map.end()) {
+          if (range_start == -1) {
+            range_start = c;
+          }
+          continue;
+        }
+        if (range_start != -1) {
+          new_fsm.AddEdge(state, edge.target, range_start, c - 1);
+          range_start = -1;
+        }
+        const auto& escaped_char_fsm_wse = it->second;
+        new_fsm.AddFSM(escaped_char_fsm_wse.GetFsm(), &state_mapping);
+        new_fsm.AddEpsilonEdge(state, state_mapping[escaped_char_fsm_wse.GetStart()]);
+        for (int end : escaped_char_fsm_wse.GetEnds()) {
+          new_fsm.AddEpsilonEdge(state_mapping[end], edge.target);
+        }
+      }
+      if (range_start != -1) {
+        new_fsm.AddEdge(state, edge.target, range_start, edge.max);
+      }
+    }
+  }
+  return ResultOk(FSMWithStartEnd(new_fsm, fsm_wse.GetStart(), fsm_wse.GetEnds()));
+}
+
 class TrieFSMBuilderImpl {
  public:
   TrieFSMBuilderImpl() = default;
